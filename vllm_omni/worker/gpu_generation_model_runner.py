@@ -458,8 +458,13 @@ class GPUGenerationModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin
 
         if self._async_chunk:
             inter_stage_outputs, multimodal_outputs = partition_payload_list(per_req_payloads)
+            accumulate_src = inter_stage_outputs
         else:
+            # async_chunk=False uses the full-payload coordinator: accumulate the
+            # whole payload for the next stage. Gating accumulation on the (None)
+            # inter-stage split starves the next stage (#4527).
             inter_stage_outputs, multimodal_outputs = None, per_req_payloads
+            accumulate_src = per_req_payloads
 
         # [Omni] Copy req_id mappings to avoid async scheduling mutation.
         req_ids_output_copy = self.input_batch.req_ids.copy()
@@ -467,11 +472,11 @@ class GPUGenerationModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin
         routed_experts_lists = None
         if self.routed_experts_initialized:
             routed_experts_lists = self._omni_extract_routed_experts(scheduler_output)
-        if inter_stage_outputs and self._should_accumulate_full_payload_output():
+        if accumulate_src and self._should_accumulate_full_payload_output():
             for i, rid in enumerate(req_ids_output_copy):
                 req_state = self.requests.get(rid)
-                if req_state is not None and inter_stage_outputs[i]:
-                    self.accumulate_full_payload_output(rid, inter_stage_outputs[i], req_state)
+                if req_state is not None and accumulate_src[i]:
+                    self.accumulate_full_payload_output(rid, accumulate_src[i], req_state)
 
         output = OmniModelRunnerOutput(
             req_ids=req_ids_output_copy,

@@ -1653,15 +1653,20 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
         pooler_output = pooler_output or []
         if self._async_chunk:
             pooler_inter, pooler_client = partition_payload_list(pooler_output)
+            accumulate_src = pooler_inter
         else:
+            # async_chunk=False uses the full-payload coordinator: the whole
+            # payload must be accumulated for the next stage. Gating accumulation
+            # on the (None) inter-stage split starves the next stage (#4527).
             pooler_inter, pooler_client = None, pooler_output
+            accumulate_src = pooler_output
 
-        if pooler_inter and self._should_accumulate_full_payload_output():
+        if accumulate_src and self._should_accumulate_full_payload_output():
             with record_function_or_nullcontext("omni_output_builder:accumulate_full_payload_output"):
                 for i, rid in enumerate(req_ids_output_copy):
                     req_state = self.requests.get(rid)
-                    if req_state is not None and pooler_inter[i]:
-                        self.accumulate_full_payload_output(rid, pooler_inter[i], req_state)
+                    if req_state is not None and accumulate_src[i]:
+                        self.accumulate_full_payload_output(rid, accumulate_src[i], req_state)
 
         with record_function_or_nullcontext("omni_output_builder:build_multimodal_outputs"):
             inter_stage_outputs = self._build_multimodal_outputs(pooler_inter)
